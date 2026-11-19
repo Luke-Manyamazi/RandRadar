@@ -1,0 +1,49 @@
+# RandRadar - research config.
+# The logger only READS public prices. It never trades and needs no API keys.
+
+interval_s: 3            # poll every 3 seconds
+stale_after_s: 30        # no fresh book for this long = exchange marked DOWN
+max_book_age_s: 8        # routes only use books this young, so all legs are the same moment
+notional_zar: 20000      # trade size simulated through the real order book (R20k)
+depth_pct: 1.0           # liquidity measured within 1% of best price
+db_path: data/arb.sqlite
+fx_refresh_s: 3600       # USD/ZAR reference (ECB via Frankfurter) refreshed hourly
+
+# Market used to compute the USDT premium vs the official USD/ZAR rate.
+usdt_zar_market: valr:USDTZAR
+
+# exchange:SYMBOL (as the exchange spells it). Luno calls Bitcoin XBT.
+markets:
+  valr:BTCZAR:   {base: BTC,  quote: ZAR}
+  valr:USDTZAR:  {base: USDT, quote: ZAR}
+  luno:XBTZAR:   {base: BTC,  quote: ZAR}
+  luno:USDTZAR:  {base: USDT, quote: ZAR}
+  binance:BTCUSDT: {base: BTC, quote: USDT}
+
+# Each route starts with ZAR and must end with ZAR. Steps run in order.
+routes:
+  # Same coin, two SA exchanges
+  btc_valr_to_luno:   ["buy valr:BTCZAR", "sell luno:XBTZAR"]
+  btc_luno_to_valr:   ["buy luno:XBTZAR", "sell valr:BTCZAR"]
+  usdt_valr_to_luno:  ["buy valr:USDTZAR", "sell luno:USDTZAR"]
+  usdt_luno_to_valr:  ["buy luno:USDTZAR", "sell valr:USDTZAR"]
+  # Offshore loops through Binance (this is where the "USDT premium" lives)
+  offshore_btc_in_valr:  ["buy valr:USDTZAR", "buy binance:BTCUSDT", "sell valr:BTCZAR"]
+  offshore_btc_out_valr: ["buy valr:BTCZAR", "sell binance:BTCUSDT", "sell valr:USDTZAR"]
+  offshore_btc_in_luno:  ["buy luno:USDTZAR", "buy binance:BTCUSDT", "sell luno:XBTZAR"]
+  offshore_btc_out_luno: ["buy luno:XBTZAR", "sell binance:BTCUSDT", "sell luno:USDTZAR"]
+
+fees:
+  # TAKER fee in percent. !! Replace with the figures on YOUR account fee page !!
+  # Fees differ by pair type and volume tier; these are conservative placeholders.
+  taker_pct:
+    valr: 0.10
+    luno: 0.10
+    binance: 0.10
+  # Fixed withdrawal fee in units of the asset, charged by the SENDING exchange.
+  # !! Placeholders - check each exchange's withdrawal page, they change often !!
+  # Only used for the "transfer" figure (moving coins every trade).
+  withdrawal:
+    valr:    {BTC: 0.00006, USDT: 1.0, ZAR: 8.0}
+    luno:    {BTC: 0.00006, USDT: 1.0, ZAR: 8.5}
+    binance: {BTC: 0.00002, USDT: 1.0}

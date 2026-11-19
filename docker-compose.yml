@@ -1,0 +1,11 @@
+services:
+  logger:
+    build: .
+    restart: unless-stopped        # Docker restarts it after a crash or a reboot
+    volumes:
+      - ./data:/app/data           # the SQLite database lives here, outside the container
+      - ./reports:/app/reports
+      - ./config.yaml:/app/config.yaml:ro
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
