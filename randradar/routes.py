@@ -84,7 +84,7 @@ def simulate(
     route: Route,
     markets: Mapping[str, Market],
     books: Mapping[str, OrderBook],
-    taker_fee: Mapping[str, float],          # exchange -> fraction (0.001 = 0.10%)
+    taker_fee: Mapping[str, float],          # market_id or exchange -> fraction (0.001 = 0.10%)
     withdrawal_fee: Mapping[str, Mapping[str, float]],  # exchange -> asset -> fixed amount
     notional_zar: float,
     include_transfers: bool,
@@ -98,7 +98,9 @@ def simulate(
         out = fill_buy(book.asks, amount) if step.side == "buy" else fill_sell(book.bids, amount)
         if out is None:
             return None
-        amount = out * (1 - taker_fee.get(m.exchange, 0.0))
+        # Per-market fee (fetched from the account) wins over the per-exchange default.
+        fee = taker_fee.get(step.market_id, taker_fee.get(m.exchange, 0.0))
+        amount = out * (1 - fee)
 
         nxt = route.steps[i + 1] if i + 1 < len(route.steps) else None
         if include_transfers:

@@ -13,6 +13,7 @@ import httpx
 from .books import OrderBook
 from .config import Config
 from .exchanges import BookFetcher, fetch_usdzar
+from .fees import FeeResult, fetch_all, merged
 from .routes import Market, evaluate
 from .store import Store
 
@@ -20,11 +21,15 @@ log = logging.getLogger("randradar")
 
 FetchFn = Callable[[Market], Awaitable[Optional[OrderBook]]]
 FxFn = Callable[[], Awaitable[Optional[float]]]
+FeeFn = Callable[[], Awaitable[Optional["FeeResult"]]]
 
 
 class Logger:
-    def __init__(self, cfg: Config, store: Store, fetch: FetchFn, fx: FxFn):
-        self.cfg, self.store, self.fetch, self.fx = cfg, store, fetch, fx
+    def __init__(self, cfg: Config, store: Store, fetch: FetchFn, fx: FxFn, fees: Optional[FeeFn] = None):
+        self.cfg, self.store, self.fetch, self.fx, self.fee_fn = cfg, store, fetch, fx, fees
+        self.taker_fee = dict(cfg.taker_fee)
+        self.withdrawal_fee = {ex: dict(d) for ex, d in cfg.withdrawal_fee.items()}
+        self.fees_at = 0.0
         self.books: dict[str, OrderBook] = {}
         self.usdzar: Optional[float] = None
         self.fx_at = 0.0
@@ -45,8 +50,35 @@ class Logger:
         else:
             self.store.event("WARN", "fx", "all USD/ZAR sources failed; keeping last value")
 
+    async def refresh_fees(self) -> None:
+        """Read the account's real fees (read-only keys) once a day; config.yaml is the fallback."""
+        if self.fee_fn is None or time.time() - self.fees_at < self.cfg.fee_refresh_s:
+            return
+        self.fees_at = time.time()
+        try:
+            res = await self.fee_fn()
+        except Exception as exc:  # noqa: BLE001
+            self.store.event("WARN", "fees", f"fee refresh failed, keeping current fees: {exc!r}"[:500])
+            return
+        if res is None:
+            return
+        taker, wd = merged(self.cfg, res)
+        if taker != self.taker_fee or wd != self.withdrawal_fee:
+            self.store.event("INFO", "fees", "fees updated: " + json.dumps({"taker": taker, "withdrawal": wd}))
+            log.info("fees updated from accounts (%d fetched values)", len(res.taker) + sum(map(len, res.withdrawal.values())))
+        self.taker_fee, self.withdrawal_fee = taker, wd
+        for line in res.notes:
+            if not line.startswith("OK"):
+                log.warning("fees: %s", line)
+        self._snapshot_fees()
+
+    def _snapshot_fees(self) -> None:
+        self.store.fee_snapshot(json.dumps({"taker_fee": self.taker_fee, "withdrawal_fee": self.withdrawal_fee,
+                                            "notional_zar": self.cfg.notional_zar}))
+
     async def tick(self) -> None:
         now = time.time()
+        await self.refresh_fees()
         results = await asyncio.gather(*(self.fetch(m) for m in self.cfg.markets.values()))
         quote_rows = []
         for m, book in zip(self.cfg.markets.values(), results):
@@ -72,8 +104,8 @@ class Logger:
         for route in self.cfg.routes:
             if not all(s.market_id in fresh for s in route.steps):
                 continue  # a leg is stale/down: never compute on old prices
-            r = evaluate(route, self.cfg.markets, fresh, self.cfg.taker_fee,
-                         self.cfg.withdrawal_fee, self.cfg.notional_zar)
+            r = evaluate(route, self.cfg.markets, fresh, self.taker_fee,
+                         self.withdrawal_fee, self.cfg.notional_zar)
             spread_rows.append((now, r.route, r.gross_pct, r.net_inventory_pct, r.net_transfer_pct,
                                 int(r.fillable), self.cfg.notional_zar, self.usdzar, premium))
 
@@ -105,9 +137,7 @@ class Logger:
                  up, self.ticks, self.rows, self.usdzar and round(self.usdzar, 4), down)
 
     async def run(self, max_ticks: Optional[int] = None) -> None:
-        self.store.fee_snapshot(json.dumps({"taker_fee": self.cfg.taker_fee,
-                                            "withdrawal_fee": self.cfg.withdrawal_fee,
-                                            "notional_zar": self.cfg.notional_zar}))
+        self._snapshot_fees()
         self.store.event("INFO", "logger", "started")
         self.store.commit()
         while not self.stop.is_set():
@@ -134,7 +164,8 @@ async def main(cfg: Config) -> None:
     headers = {"User-Agent": "randradar/0.1-beta (research; public data only)"}
     async with httpx.AsyncClient(timeout=8.0, headers=headers) as http:
         fetcher = BookFetcher(http)
-        lg = Logger(cfg, Store(cfg.db_path), fetcher.fetch, lambda: fetch_usdzar(http))
+        lg = Logger(cfg, Store(cfg.db_path), fetcher.fetch, lambda: fetch_usdzar(http),
+                    lambda: fetch_all(cfg, http))
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -163,3 +194,22 @@ async def check(cfg: Config) -> bool:
         print(f"{'OK' if rate else 'FAIL':5} USD/ZAR reference  {rate}")
         ok = ok and bool(rate)
     return ok
+
+
+async def check_fees(cfg: Config) -> bool:
+    """Show which fees come from your accounts and which fall back to config.yaml."""
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        res = await fetch_all(cfg, http)
+    for line in res.notes:
+        print(line)
+    taker, wd = merged(cfg, res)
+    print("\nFees the logger will use:")
+    for m in cfg.markets.values():
+        f = taker.get(m.market_id, taker.get(m.exchange, 0.0))
+        src = "account" if m.market_id in res.taker else "config.yaml"
+        print(f"  {m.market_id:18} taker {f * 100:.3f}%   ({src})")
+    for ex, d in sorted(wd.items()):
+        for asset, v in sorted(d.items()):
+            src = "account" if asset in res.withdrawal.get(ex, {}) else "config.yaml"
+            print(f"  {ex:8} withdraw {asset:5} {v:g}   ({src})")
+    return not any(n.startswith("FAIL") for n in res.notes)

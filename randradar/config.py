@@ -23,6 +23,8 @@ class Config:
     withdrawal_fee: dict[str, dict[str, float]]
     fx_refresh_s: float
     usdt_zar_market: str | None
+    fee_refresh_s: float = 86400
+    withdraw_networks: dict = None  # exchange -> asset -> network code
 
 
 def load(path: str | Path) -> Config:
@@ -61,6 +63,8 @@ def load(path: str | Path) -> Config:
                         for ex, d in fees.get("withdrawal", {}).items()},
         fx_refresh_s=float(raw.get("fx_refresh_s", 3600)),
         usdt_zar_market=raw.get("usdt_zar_market"),
+        fee_refresh_s=float(raw.get("fee_refresh_s", 86400)),
+        withdraw_networks=fees.get("withdraw_networks", {}) or {},
     )
 
 

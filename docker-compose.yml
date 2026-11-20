@@ -1,7 +1,10 @@
 services:
   logger:
     build: .
-    restart: unless-stopped        # Docker restarts it after a crash or a reboot
+    restart: unless-stopped
+    env_file:
+      - path: .env                 # optional read-only keys for fee fetching
+        required: false        # Docker restarts it after a crash or a reboot
     volumes:
       - ./data:/app/data           # the SQLite database lives here, outside the container
       - ./reports:/app/reports

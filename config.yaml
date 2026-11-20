@@ -8,6 +8,7 @@ notional_zar: 20000      # trade size simulated through the real order book (R20
 depth_pct: 1.0           # liquidity measured within 1% of best price
 db_path: data/arb.sqlite
 fx_refresh_s: 3600       # USD/ZAR reference (ECB via Frankfurter) refreshed hourly
+fee_refresh_s: 86400     # re-read your account fees daily (only if read-only keys are in .env)
 
 # Market used to compute the USDT premium vs the official USD/ZAR rate.
 usdt_zar_market: valr:USDTZAR
@@ -34,8 +35,9 @@ routes:
   offshore_btc_out_luno: ["buy luno:XBTZAR", "sell binance:BTCUSDT", "sell luno:USDTZAR"]
 
 fees:
-  # TAKER fee in percent. !! Replace with the figures on YOUR account fee page !!
-  # Fees differ by pair type and volume tier; these are conservative placeholders.
+  # These are FALLBACKS. With read-only API keys in .env the logger reads your real
+  # fees from each exchange daily (python run.py --check-fees shows the result).
+  # TAKER fee in percent, per exchange.
   taker_pct:
     valr: 0.10
     luno: 0.10
@@ -44,6 +46,9 @@ fees:
   # !! Placeholders - check each exchange's withdrawal page, they change often !!
   # Only used for the "transfer" figure (moving coins every trade).
   withdrawal:
-    valr:    {BTC: 0.00006, USDT: 1.0, ZAR: 8.0}
+    valr:    {BTC: 0.00006, USDT: 1.0, ZAR: 8.5}   # VALR ZAR: 30 free/month, then R8.50
     luno:    {BTC: 0.00006, USDT: 1.0, ZAR: 8.5}
     binance: {BTC: 0.00002, USDT: 1.0}
+  # Which network to price withdrawals on (Binance network codes). TRX = TRC20.
+  withdraw_networks:
+    binance: {BTC: BTC, USDT: TRX}

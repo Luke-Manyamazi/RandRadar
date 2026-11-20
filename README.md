@@ -4,7 +4,7 @@ This program answers one question before anything else gets built:
 
 > **How often is there a real, tradeable price gap between VALR, Luno and Binance after fees, and how long does it last?**
 
-It **only reads public prices**. It never trades, never needs API keys, and never touches money.
+It **reads prices and, optionally, your own fee rates**. It never trades, never withdraws, and never touches money. Read-only API keys are optional and used only to read your fees.
 
 ## What it measures
 
@@ -59,9 +59,48 @@ docker compose up -d                 # runs 24/7 and restarts itself after crash
 docker compose logs -f --tail 50     # watch it; you should see an "alive" line every minute
 ```
 
-## Before you start: set YOUR fees
+## Fees: automatic (recommended) or manual
 
-Open `config.yaml` and replace the fee placeholders with the figures on your own account's fee pages. Fees differ by tier and by pair type, and they change. Wrong fees make the whole study wrong. Every run saves the fee table it used, so you can still interpret old data later.
+Wrong fees make the whole study wrong, so the logger can read your real fee rates straight from your accounts once a day.
+
+**This does not trade.** It needs **read-only** API keys, which can only look at information. They can't place orders or withdraw money. The keys are also optional: without them, the logger uses the fallback fees in `config.yaml`.
+
+### 1. Create a read-only key on each exchange
+
+When creating each key, tick view/read permission only:
+
+| Exchange | Permission to tick | Leave unticked |
+|---|---|---|
+| VALR | View access | Trade, Withdraw, Transfer, Link bank account |
+| Luno | Read (it must be able to read orders/fees) | Trading, Send/Withdraw |
+| Binance | Enable Reading | Spot & Margin Trading, Withdrawals, everything else |
+
+### 2. Put the keys in a `.env` file
+
+Copy `.env.example` to `.env` in the project folder and paste each key in. `.env` is excluded from Git and Docker, so it never goes to GitHub. **Never paste keys into a chat.**
+
+### 3. Check what was read
+
+```bash
+python run.py --check-fees
+```
+
+Every line says either `OK` (read from your account), `SKIP` (no key, so the `config.yaml` value is used) or `FAIL` (couldn't read it, so the `config.yaml` value is used). At the end it lists the exact fees the logger will use and where each one came from.
+
+### What it reads, and from where
+
+| Fee | Source |
+|---|---|
+| VALR taker fee per pair | `GET /v1/account/fees/trade` |
+| VALR crypto withdrawal fee | `GET /v1/wallet/crypto/{coin}/withdraw` |
+| Luno taker fee per pair | `GET /api/1/fee_info` |
+| Binance taker fee | `GET /sapi/v1/asset/tradeFee` (without the BNB discount) |
+| Binance withdrawal fee | `GET /sapi/v1/capital/config/getall`, using the network set in `config.yaml` (USDT on TRC20 by default) |
+| Luno withdrawals, ZAR bank fees | Always from `config.yaml` |
+
+Luno only quotes withdrawal fees per destination address, so they can't be read in advance. ZAR bank fees are fixed amounts.
+
+Only GET requests are ever sent; the tests check this. Fees are re-read every 24 hours, and each change is logged in the database, so old data stays interpretable.
 
 ## Read the results (do this weekly)
 
@@ -115,6 +154,6 @@ Disk use is roughly 15–25 MB per day.
 
 ## Not in this phase (on purpose)
 
-Telegram, trading, learning and paid channels are left out until the data says they're worth building.
+Telegram, trading, learning and paid channels are left out until the data says they're worth building. The logger never trades.
 
 _Research tool using public market data. Not financial advice._
